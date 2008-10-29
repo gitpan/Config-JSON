@@ -4,47 +4,41 @@ use warnings;
 use strict;
 use Carp;
 use Class::InsideOut qw(readonly id register private);
+use File::Copy;
+use File::Temp qw/ tempfile /;
 use JSON;
 use List::Util;
-use version; our $VERSION = qv('1.2.1');
+use version; our $VERSION = qv('1.3.0');
 
 
 use constant FILE_HEADER    => "# config-file-type: JSON 1\n";
 
 
 readonly    getFilePath     => my %filePath;    # path to config file
+readonly    isInclude       => my %isInclude;   # is an include file
 private     config          => my %config;      # in memory config file
-readonly    keyMapping      => my %keyMapping;  # key <-> file mapping for includes
-private     duplicates      => my %duplicates;  # keep track of duplicates for deleting
+readonly    getIncludes     => my %includes;    # keeps track of any included config files
 
 #-------------------------------------------------------------------
 sub addToArray {
-    my $self = shift;
-    my $property = shift;
-    my $value = shift;
+    my ($self, $property, $value) = @_;
     my $array = $self->get($property);
     unless (defined List::Util::first { $value eq $_ } @{$array}) { # check if it already exists
-        # add it
-        push(@{$array}, $value);
-        $self->set($property, $array);
-    }
+		# add it
+      	push(@{$array}, $value);
+      	$self->set($property, $array);
+	}
 }
-
 
 #-------------------------------------------------------------------
 sub addToHash {
-    my $self = shift;
-    my $property = shift;
-    my $key = shift;
-    my $value = shift;
+    my ($self, $property, $key, $value) = @_;
     $self->set($property."/".$key, $value);
 }
 
-
 #-------------------------------------------------------------------
 sub create {
-    my $class = shift;
-    my $filename = shift;
+	my ($class, $filename) = @_;
     if (open(my $FILE,">",$filename)) {
         print $FILE FILE_HEADER."\n{ }\n";
         close($FILE);
@@ -52,77 +46,38 @@ sub create {
     else {
         carp "Can't write to config file ".$filename;
     }
-    return $class->new($filename);
+	return $class->new($filename);	
 }
-
-
 
 #-------------------------------------------------------------------
 sub delete {
-    my $self = shift;
-    my $param = shift;
+    my ($self, $param) = @_;
+	
+	# inform the includes
+	foreach my $include (@{$includes{id $self}}) {
+		$include->delete($param);
+	}
+	
+	# find the directive
+    my $directive   = $config{id $self};
     my @parts       = split "/", $param;
     my $lastPart    = pop @parts;
-
-    $self->_deleteDuplicates(@parts, $lastPart);
-    my $configFileToWrite = $self->_getIncludeFileToWrite($parts[0], $lastPart);
-    my $configHashRef = $self->_getConfigFileHashRef($configFileToWrite);
-    my $directive = $configHashRef;
-
-    my $inMemoryConfig = $config{ id $self };
-
-    if(@parts) {
-        foreach my $part ( @parts ) {
-            $directive = $directive->{$part};
-        }
+    foreach my $part (@parts) {
+        $directive = $directive->{$part};
     }
-    delete $directive->{$lastPart};
-    delete $inMemoryConfig->{$lastPart};
-
-    $self->_writeUpdatedConfigFile($configFileToWrite, $configHashRef);
-    $config{ id $self } = { %{ $inMemoryConfig }, %{ $configHashRef } };
-}
-
-#-------------------------------------------------------------------
-sub _deleteDuplicates {
-    my $self = shift;
-    my @parts = @_;
-    my $lastPart = pop @parts;
-
-    my $keyToDelete;
-    if ( my $duplicates = $duplicates{id $self} ) {
-        # can't just use $duplicates->{$lastPart} because that may not be where
-        # the duplicates start
-        $keyToDelete = List::Util::first { $duplicates->{$_} } (@parts, $lastPart);
-        foreach my $configFileToWrite ( @{ $duplicates->{$keyToDelete} } ) {
-            my $configHashRef = $self->_getConfigFileHashRef($configFileToWrite);
-            my $directive = $configHashRef;
-            if( @parts ) {
-                foreach my $part ( @parts ) {
-                    $directive = $directive->{$part};
-                }
-            }
-            delete $directive->{$lastPart};
-            $self->_writeUpdatedConfigFile($configFileToWrite, $configHashRef);
-        }
-        delete $duplicates->{$lastPart};
-        my $mapping = $keyMapping{id $self};
-        delete $mapping->{$keyToDelete};
-        $keyMapping{id $self} = $mapping;
-        $duplicates{id $self} = $duplicates;
-    }
-    else {
-        return;
-    }
+	
+	# only delete it if it exists
+	if (exists $directive->{$lastPart}) {
+		delete $directive->{$lastPart};
+		$self->write;
+	}
 }
 
 #-------------------------------------------------------------------
 sub deleteFromArray {
-    my $self = shift;
-    my $property = shift;
-    my $value = shift;
-    my $array = $self->get($property);
-    foreach (my $i = 0; $i < scalar(@{$array}); $i++) {
+    my ($self, $property, $value) = @_;
+    my $array	= $self->get($property);
+    for (my $i = 0; $i < scalar(@{$array}); $i++) {
         if ($array->[$i] eq $value) {
             splice(@{$array}, $i, 1);
             last;
@@ -131,38 +86,43 @@ sub deleteFromArray {
     $self->set($property, $array);
 }
 
-
 #-------------------------------------------------------------------
 sub deleteFromHash {
-    my $self = shift;
-    my $property = shift;
-    my $key = shift;
+    my ($self, $property, $key) = @_;
     $self->delete($property."/".$key);
 }
 
-
 #-------------------------------------------------------------------
 sub get {
-    my $self        = shift;
-    my $property    = shift;
-    my $value       = $config{id $self};
-    foreach my $part (split "/", $property) {
-        $value = $value->{$part};
-    }
-    return $value;
-}
+    my ($self, $property) = @_;
 
-#-------------------------------------------------------------------
-sub _getConfigFileHashRef {
-    my $self = shift;
-    my $configFileToWrite = shift;
-    open my $fh, '<', $configFileToWrite or carp "Cannot open config file for updating: " . $configFileToWrite;
-    my $json = do {
-        local $/;
-        <$fh>;
-    };
-    close $fh;
-    return JSON->new->relaxed(1)->decode($json);
+	# they want a specific property
+	if (defined $property) {
+
+		# look in this config
+		my $value = $config{id $self};
+		foreach my $part (split "/", $property) {
+			$value = $value->{$part};
+		}
+		return $value if (defined $value);
+
+		# look through includes
+		foreach my $include (@{$includes{id $self}}) {
+			my $value = $include->get($property);
+			return $value if (defined $value);
+		}
+
+		# didn't find it
+		return undef;
+	}
+	
+	# they want the whole properties list
+	my %whole = ();
+	foreach my $include (@{$includes{id $self}}) {
+		%whole = (%whole, %{$include->get});			
+	}
+	%whole = (%whole, %{$config{id $self}});
+	return \%whole;
 }
 
 #-------------------------------------------------------------------
@@ -173,35 +133,8 @@ sub getFilename {
 }
 
 #-------------------------------------------------------------------
-sub _getIncludeFileToWrite {
-    my $self = shift;
-    my $firstPart = shift;
-    my $lastPart = shift;
-    my $configFileToWrite;
-    # if we've got included files, search for the file where this key is defined
-    if( my $mapping = $keyMapping{ id $self } ) {
-
-        # for top-level sets, $parts[0] will be undefined. use $lastPart if that's the case.
-        my $keyToWrite = defined $firstPart ? $firstPart : $lastPart;
-
-        # the key already exists in a file; write it there
-        if( my $configFileWithKey = $mapping->{ $keyToWrite } ) { 
-            $configFileToWrite = $configFileWithKey;
-        }
-    }
-
-    # if we haven't found the file to write to (the key is new), write to the
-    # main file.
-    if(!defined $configFileToWrite) {
-        $configFileToWrite = $self->getFilePath;
-    }
-    return $configFileToWrite;
-}
-
-#-------------------------------------------------------------------
 sub new {
-    my $class = shift;
-    my $pathToFile = shift;
+    my ($class, $pathToFile, $options) = @_;
     if (open(my $FILE, "<", $pathToFile)) {
         # slurp
         local $/ = undef;
@@ -212,17 +145,18 @@ sub new {
             $conf = JSON->new->relaxed(1)->decode($json);
         };
         croak "Couldn't parse JSON in config file '$pathToFile'\n" unless ref $conf;
-        my $self = register($class);
-        $filePath{id $self} = $pathToFile;
-        $config{id $self}   = $conf;
-        if( $conf->{includes} ) {
-            my $keysInMainConfig;
-            foreach my $key ( keys %{ $conf } ) {
-                $keysInMainConfig->{$key} = $pathToFile;
-            }
-            $keyMapping{id $self} = $keysInMainConfig;
-            $self->_processIncludeFiles;
-        }
+        my $self 		= register($class);
+		my $id 			= id $self;
+        $filePath{$id} 	= $pathToFile;
+        $config{$id}   	= $conf;
+        $isInclude{$id} = $options->{isInclude};
+		
+		# process includes
+		my @includes = map { glob $_ } @{ $self->get('includes') || [] };
+		foreach my $include (@includes) {
+			push @{$includes{$id}},  $class->new($include, {isInclude=>1});
+		}
+		
         return $self;
     } 
     else {
@@ -231,111 +165,79 @@ sub new {
 }
 
 #-------------------------------------------------------------------
-# combine multiple include files into a single data structure. carps for
-# duplicate keys, croaks on being unable to load an include for whatever reason
-sub _processIncludeFiles {
-    my $self = shift;
-    my $includes = $self->get('includes');
-
-    # handle wildcards
-    my @includes = map { glob $_ } @{ $includes };
-
-    my $duplicates = {};
-    foreach my $include ( @includes ) {
-        if( open my $FILE, '<', $include ) {
-            local $/ = undef;
-            my $json = <$FILE>;
-            close $FILE;
-            my $includeConf;
-            eval {
-                $includeConf = JSON->new->relaxed(1)->decode($json)
-            };
-            croak "Couldn't parse JSON in include file '$include'\n" unless ref $includeConf;
-            my $keyMapping = $keyMapping{id $self};
-            foreach my $key ( keys %{ $includeConf } ) {
-                # let the user know if there are duplicates
-                if( exists $keyMapping->{$key} ) {
-                    unless( exists $duplicates->{$key} ) {
-                        $duplicates->{$key} = [];
-                    }
-                    carp "Key $key already exists in configuration, defined in " . $keyMapping->{$key};
-                    push @{ $duplicates->{$key} }, $include;
-                }
-                # ... but don't fail outright
-                $keyMapping->{$key} = $include;
-            }
-            my $oldConf = $config{id $self};
-            my $newConf = { %{ $oldConf }, %{ $includeConf } };
-            $config{id $self} = $newConf;
-        }
-        else {
-            croak "Cannot read include file: " . $include;
-        }
-    }
-    $duplicates{id $self} = $duplicates;
-}
-
-#-------------------------------------------------------------------
 sub set {
-    my $self        = shift;
-    my $property    = shift;
-    my $value       = shift;
+    my ($self, $property, $value) 	= @_;
 
-    my @parts       = split "/", $property;
-    my $lastPart    = pop @parts;
+	# see if the directive exists in this config
+    my $directive	= $config{id $self};
+    my @parts 		= split "/", $property;
+	my $numParts 	= scalar @parts;
+	for (my $i=0; $i < $numParts; $i++) {
+		my $part = $parts[$i];
+		if (exists $directive->{$part}) { # exists so we continue
+			if ($i == $numParts - 1) { # we're on the last part
+				$directive->{$part} = $value;
+				$self->write;
+				return 1;
+			}
+			else {
+				$directive = $directive->{$part};
+			}
+		}
+		else { # doesn't exist so we quit
+			last;
+		}
+	}
 
-    my $configFileToWrite = $self->_getIncludeFileToWrite($parts[0], $lastPart);
+	# see if any of the includes have this directive
+	foreach my $include (@{$includes{id $self}}) {
+		my $found = $include->set($property, $value);
+		return 1 if ($found);
+	}
 
-    # read the file to write and then do the writing. must use raw json because
-    # we can't read in the main file with config::json: it would process the
-    # includes and we'd write a single monolithic file; not what we want!
+	# let's create the directive new in this config if it's not an include
+	unless ($self->isInclude) {
+		$directive	= $config{id $self};
+		my $lastPart = pop @parts;
+		foreach my $part (@parts) {
+			unless (exists $directive->{$part}) {
+				$directive->{$part} = {};
+			}
+			$directive = $directive->{$part};
+		}
+	    $directive->{$lastPart} = $value;
+		$self->write;
+		return 1;
+	}
 
-    my $configHashRef = $self->_getConfigFileHashRef($configFileToWrite);
-    my $directive = $configHashRef;
-
-    # now, what we need to do is walk through the data structure, and get to
-    # the point that we're changing. if it's a top level set, @parts will be
-    # empty, so just use $lastPart.
-    # need to set the value in the in-memory config since we didn't use the API to do the write
-    my $inMemoryConfig = $config{ id $self };
-    if(@parts) {
-        foreach my $part ( @parts ) {
-            unless ( exists $inMemoryConfig->{$part} ) {
-                $directive->{$part} = $inMemoryConfig->{$part} = {};
-            }
-            $directive = $directive->{$part};
-        }
-    }
-
-    # finally, assign the value, and write it to disk
-    $directive->{$lastPart} = $value;
-
-    $self->_writeUpdatedConfigFile($configFileToWrite, $configHashRef);
-
-    # update the in-memory configuration since we wrote raw JSON
-    $config{ id $self } = { %{ $inMemoryConfig }, %{ $configHashRef } };
+	# didn't find a place to write it	
+	return 0;
 }
 
 #-------------------------------------------------------------------
-sub _writeUpdatedConfigFile {
-    my $self = shift;
-    my $configFileToWrite = shift;
-    my $configHashRef = shift;
+sub write {
+	my $self = shift;
+	my $realfile = $self->getFilePath;
 
-    my $json = JSON->new->pretty->encode($configHashRef);
-    if (open(my $FILE, ">", $configFileToWrite)) {
+	# convert data to json
+    my $json = JSON->new->pretty->encode($config{id $self});
+
+	# create a temporary config file
+	my ($fh, $tempfile) = tempfile();
+	close($fh);
+    if (open(my $FILE,">", $tempfile)) {
         print $FILE FILE_HEADER."\n".$json;
         close($FILE);
     } 
     else {
-        carp "Can't write to config file ".$self->getFilePath;
+        croak "Can't write (".$realfile.") to temporary file (".$tempfile.")";
     }
+	
+	# move the temp file over the top of the existing file
+	copy($tempfile, $realfile) or croak "Can't copy temporary file (".$tempfile.") to config file (".$realfile.")";
+	unlink $tempfile or carp "Can't delete temporary config file (".$tempfile.")";
 }
 
-sub dump {
-    my $self = shift;
-    return $config{id $self};
-}
 
 1; # Magic true value required at end of module
 __END__
@@ -347,7 +249,7 @@ Config::JSON - A JSON based config file system.
 
 =head1 VERSION
 
-This document describes Config::JSON version 1.2.1
+This document describes Config::JSON version 1.3.0
 
 
 =head1 SYNOPSIS
@@ -362,11 +264,11 @@ This document describes Config::JSON version 1.2.1
  $config->set($directive,$value);
 
  $config->delete($directive);
- $config->deleteFromHash($name, $key);
- $config->deleteFromArray($name, $value);
+ $config->deleteFromHash($directive, $key);
+ $config->deleteFromArray($directive, $value);
 
- $config->addToHash($name, $key, $value);
- $config->addToArray($name, $value);
+ $config->addToHash($directive, $key, $value);
+ $config->addToArray($directive, $value);
 
  my $path = $config->getFilePath;
  my $filename = $config->getFilename;
@@ -374,7 +276,6 @@ This document describes Config::JSON version 1.2.1
 =head2 Example Config File
 
  # config-file-type: JSON 1
-
  {
         "dsn" : "DBI:mysql:test",
         "user" : "tester",
@@ -388,12 +289,9 @@ This document describes Config::JSON version 1.2.1
                 "health" : 32,
                 "vitality" : 11
         },
-
-        # include some other files. wildcards are expanded with glob
-        "includes": [
-            "firstInclude.conf",
-            "*.include.conf",
-        ]
+		
+		# including another file
+		"includes" : ["macros.conf"]
  } 
 
 
@@ -403,9 +301,11 @@ This package parses the config files written in JSON. It also does some non-JSON
 
 If you want to see it in action, it is used as the config file system in WebGUI L<http://www.webgui.org/>.
 
+
 =head2 Why?
 
 Why build yet another config file system? Well there are a number of reasons: We used to use other config file parsers, but we kept running into limitations. We already use JSON in our app, so using JSON to store config files means using less memory because we already have the JSON parser in memory. In addition, with JSON we can have any number of hierarchcal data structures represented in the config file, whereas most config files will give you only one level of hierarchy, if any at all. JSON parses faster than XML and YAML. JSON is easier to read and edit than XML. Many other config file systems allow you to read a config file, but they don't provide any mechanism or utilities to write back to it. JSON is taint safe. JSON is easily parsed by languages other than Perl when we need to do that.
+
 
 =head2 Multi-level Directives
 
@@ -418,13 +318,24 @@ multiple elements of the hash when specifying a directive name by simply delimit
 
 You may do this wherever you specify a directive name.
 
-=head2 Including files
-
-You may specify a list of files to include using the C<includes> directive. All files will be checked for shell globs and expanded appropriately. Config::JSON will emit a warning for each duplicate key found.
 
 =head2 Comments
 
 You can put comments in the config file as long as # is the first non-space character on the line. However, if you use this API to write to the config file, your comments will be eliminated.
+
+
+=head2 Includes
+
+There is a special directive called "includes", which is an array of include files that may be brought in to
+the config. Even the files you include can have an "includes" directive, so you can do hierarchical includes.
+
+Any directive in the main file will take precedence over the directives in the includes. Likewise the files
+listed first in the "includes" directive will have precedence over the files that come after it. When writing
+to the files, the same precedence is followed.
+
+If you're setting a new directive that doesn't currently exist, it will only be written to the main file.
+
+If a directive is deleted, it will be deleted from all files, including the includes.
 
 =head1 INTERFACE 
 
@@ -529,6 +440,12 @@ Returns the filename and path for this config.
 
 
 
+=head2 getIncludes ( )
+
+Returns an array reference of Config::JSON objects that are files included by this config.
+
+
+
 =head2 new ( pathToFile )
 
 Constructor. Builds an object around a config file.
@@ -552,6 +469,10 @@ A directive name.
 The value to set the paraemter to. Can be a scalar, hash reference, or array reference.
 
 
+
+=head2 write ( )
+
+Writes the file to the filesystem. Normally you'd never need to call this as it's called automatically by the other methods when a change occurs.
 
 
 
@@ -614,11 +535,9 @@ C<bug-config-json@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org>.
 
 
-=head1 AUTHORS
+=head1 AUTHOR
 
 JT Smith  C<< <jt-at-plainblack-dot-com> >>
-
-Chris Nehren C<< <chris-at-plainblack-dot-com> >>
 
 
 =head1 LICENCE AND COPYRIGHT
