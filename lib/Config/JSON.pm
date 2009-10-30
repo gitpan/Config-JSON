@@ -4,15 +4,12 @@ use warnings;
 use strict;
 use Carp;
 use Class::InsideOut qw(readonly id register private);
-use File::Copy;
-use File::Temp qw/ tempfile /;
-use JSON;
+use File::Spec;
+use JSON 2.0;
 use List::Util;
-use version; our $VERSION = qv('1.3.1');
-
+use version; our $VERSION = qv('1.4.0');
 
 use constant FILE_HEADER    => "# config-file-type: JSON 1\n";
-
 
 readonly    getFilePath     => my %filePath;    # path to config file
 readonly    isInclude       => my %isInclude;   # is an include file
@@ -28,6 +25,38 @@ sub addToArray {
       	push(@{$array}, $value);
       	$self->set($property, $array);
 	}
+}
+
+#-------------------------------------------------------------------
+sub addToArrayAfter {
+    my ($self, $property, $afterValue, $value) = @_;
+    my $array = $self->get($property);
+    unless (defined List::Util::first { $value eq $_ } @{ $array }) { # check if it already exists
+        my $idx = 0;
+        for (; $idx < $#{ $array }; $idx++) {
+            if ($array->[$idx] eq $afterValue) {
+                last;
+            }
+        }
+        splice @{ $array }, $idx + 1, 0, $value;
+        $self->set($property, $array);
+    }
+}
+
+#-------------------------------------------------------------------
+sub addToArrayBefore {
+    my ($self, $property, $beforeValue, $value) = @_;
+    my $array = $self->get($property);
+    unless (defined List::Util::first { $value eq $_ } @{ $array }) { # check if it already exists
+        my $idx = $#{ $array };
+        for (; $idx > 0; $idx--) {
+            if ($array->[$idx] eq $beforeValue) {
+                last;
+            }
+        }
+        splice @{ $array }, $idx , 0, $value;
+        $self->set($property, $array);
+    }
 }
 
 #-------------------------------------------------------------------
@@ -60,7 +89,7 @@ sub delete {
 	
 	# find the directive
     my $directive   = $config{id $self};
-    my @parts       = split "/", $param;
+    my @parts       = $self->splitKeyParts($param);
     my $lastPart    = pop @parts;
     foreach my $part (@parts) {
         $directive = $directive->{$part};
@@ -101,7 +130,7 @@ sub get {
 
 		# look in this config
 		my $value = $config{id $self};
-		foreach my $part (split "/", $property) {
+		foreach my $part ($self->splitKeyParts($property)) {
 			$value = eval{$value->{$part}};
             if ($@) {
                 croak "Can't access $property. $@";
@@ -173,7 +202,7 @@ sub set {
 
 	# see if the directive exists in this config
     my $directive	= $config{id $self};
-    my @parts 		= split "/", $property;
+    my @parts 		= $self->splitKeyParts($property);
 	my $numParts 	= scalar @parts;
 	for (my $i=0; $i < $numParts; $i++) {
 		my $part = $parts[$i];
@@ -218,20 +247,48 @@ sub set {
 }
 
 #-------------------------------------------------------------------
-sub write {
-	my $self = shift;
-	my $realfile = $self->getFilePath;
+sub splitKeyParts {
+    my ($self, $key) = @_;
+    my @parts = split /(?<!\\)\//, $key;
+    map {s{\\\/}{/}} @parts;
+    return @parts;
+}
 
-	# convert data to json
+#-------------------------------------------------------------------
+sub write {
+    my $self = shift;
+    my $realfile = $self->getFilePath;
+
+    # convert data to json
     my $json = JSON->new->pretty->utf8->canonical->encode($config{id $self});
 
-	# create a temporary config file
-	my ($fh, $tempfile) = tempfile(UNLINK=>1);
-    print {$fh} FILE_HEADER."\n".$json;
-    close($fh);
-	
-	# move the temp file over the top of the existing file
-	copy($tempfile, $realfile) or croak "Can't copy temporary file (".$tempfile.") to config file (".$realfile.")";
+    my $to_write = FILE_HEADER . "\n" . $json;
+    my $needed_bytes = length $to_write;
+
+    # open as read/write
+    open my $fh, '+<:raw', $realfile or croak "Unable to open $realfile for write: $!";
+    my $current_bytes = (stat $fh)[7];
+    # shrink file if needed
+    if ($needed_bytes < $current_bytes) {
+        truncate $fh, $needed_bytes;
+    }
+    # make sure we can expand the file to the needed size before we overwrite it
+    elsif ($needed_bytes > $current_bytes) {
+        my $padding = q{ } x ($needed_bytes - $current_bytes);
+        sysseek $fh, 0, 2;
+        if (! syswrite $fh, $padding) {
+            sysseek $fh, 0, 0;
+            truncate $fh, $current_bytes;
+            close $fh;
+            croak "Unable to expand $realfile: $!";
+        }
+        sysseek $fh, 0, 0;
+        seek $fh, 0, 0;
+    }
+    print {$fh} $to_write;
+    close $fh;
+
+    return 1;
 }
 
 
@@ -245,7 +302,7 @@ Config::JSON - A JSON based config file system.
 
 =head1 VERSION
 
-This document describes Config::JSON version 1.3.1
+This document describes Config::JSON version 1.4.0
 
 
 =head1 SYNOPSIS
@@ -273,22 +330,22 @@ This document describes Config::JSON version 1.3.1
 
  # config-file-type: JSON 1
  {
-        "dsn" : "DBI:mysql:test",
-        "user" : "tester",
-        "password" : "xxxxxx", 
+    "dsn" : "DBI:mysql:test",
+    "user" : "tester",
+    "password" : "xxxxxx",
 
-        # some colors to choose from
-        "colors" : [ "red", "green", "blue" ],
+    # some colors to choose from
+    "colors" : [ "red", "green", "blue" ],
 
-        # some statistics
-        "stats" : {
-                "health" : 32,
-                "vitality" : 11
-        },
-		
-		# including another file
-		"includes" : ["macros.conf"]
- } 
+    # some statistics
+    "stats" : {
+            "health" : 32,
+            "vitality" : 11
+    },
+
+    # including another file
+    "includes" : ["macros.conf"]
+ }
 
 
 =head1 DESCRIPTION
@@ -300,7 +357,19 @@ If you want to see it in action, it is used as the config file system in WebGUI 
 
 =head2 Why?
 
-Why build yet another config file system? Well there are a number of reasons: We used to use other config file parsers, but we kept running into limitations. We already use JSON in our app, so using JSON to store config files means using less memory because we already have the JSON parser in memory. In addition, with JSON we can have any number of hierarchcal data structures represented in the config file, whereas most config files will give you only one level of hierarchy, if any at all. JSON parses faster than XML and YAML. JSON is easier to read and edit than XML. Many other config file systems allow you to read a config file, but they don't provide any mechanism or utilities to write back to it. JSON is taint safe. JSON is easily parsed by languages other than Perl when we need to do that.
+Why build yet another config file system? Well there are a number
+of reasons: We used to use other config file parsers, but we kept
+running into limitations. We already use JSON in our app, so using
+JSON to store config files means using less memory because we already
+have the JSON parser in memory. In addition, with JSON we can have
+any number of hierarchcal data structures represented in the config
+file, whereas most config files will give you only one level of
+hierarchy, if any at all. JSON parses faster than XML and YAML.
+JSON is easier to read and edit than XML. Many other config file
+systems allow you to read a config file, but they don't provide any
+mechanism or utilities to write back to it. JSON is taint safe.
+JSON is easily parsed by languages other than Perl when we need to
+do that.
 
 
 =head2 Multi-level Directives
@@ -333,7 +402,7 @@ If you're setting a new directive that doesn't currently exist, it will only be 
 
 If a directive is deleted, it will be deleted from all files, including the includes.
 
-=head1 INTERFACE 
+=head1 INTERFACE
 
 =head2 addToArray ( directive, value )
 
@@ -346,6 +415,42 @@ The name of the array.
 =head3 value
 
 The value to add.
+
+=head2 addToArrayBefore ( directive, insertBefore, value )
+
+Inserts a value into an array immediately before another item.  If
+that item can't be found, inserts at the beginning on the array.
+
+=head3 directive
+
+The name of the array.
+
+=head3 insertBefore
+
+The value to search for and base the positioning on.
+
+=head3 value
+
+The value to insert.
+
+
+=head2 addToArrayAfter ( directive, insertAfter, value )
+
+Inserts a value into an array immediately after another item.  If
+that item can't be found, inserts at the end on the array.
+
+=head3 directive
+
+The name of the array.
+
+=head3 insertAfter
+
+The value to search for and base the positioning on.
+
+=head3 value
+
+The value to insert.
+
 
 
 =head2 addToHash ( directive, key, value )
@@ -441,7 +546,6 @@ Returns the filename and path for this config.
 Returns an array reference of Config::JSON objects that are files included by this config.
 
 
-
 =head2 new ( pathToFile )
 
 Constructor. Builds an object around a config file.
@@ -463,6 +567,20 @@ A directive name.
 =head3 value
 
 The value to set the paraemter to. Can be a scalar, hash reference, or array reference.
+
+
+
+=head2 splitKeyParts ( key )
+
+Returns an array of key parts.
+
+=head3 key
+
+A key string. Could be 'foo' (simple key), 'foo/bar' (a multilevel key referring to the bar key as a child of foo), or 'foo\/bar' (a simple key that contains a slash in the key). Don't forget to double escape in your perl code if you have a slash in your key parts like this:
+
+ $config->get('foo\\/bar');
+
+=cut
 
 
 
@@ -510,8 +628,6 @@ Config::JSON requires no configuration files or environment variables.
 
 =item Test::Deep
 
-=item File::Temp
-
 =item version
 
 =back
@@ -538,7 +654,7 @@ JT Smith  C<< <jt-at-plainblack-dot-com> >>
 
 =head1 LICENCE AND COPYRIGHT
 
-Copyright (c) 2006-2008, Plain Black Corporation L<http://www.plainblack.com/>. All rights reserved.
+Copyright (c) 2006-2009, Plain Black Corporation L<http://www.plainblack.com/>. All rights reserved.
 
 This module is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself. See L<perlartistic>.

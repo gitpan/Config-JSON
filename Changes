@@ -1,5 +1,11 @@
 Revision history for Config-JSON
 
+1.4.0
+    Fixed resetting permissions of file on write
+    Fixed another bug that could lead to erasing the config file.
+    Add addToArrayAfter and addToArrayBefore methods to more easily insert items into lists.
+    Added support for slashes in keys via escaping.
+
 1.3.1   Mon Dec 8 14:00:00 2008
     fix: #41525 Cleaning up temporary directory 
     Throws a better error message when trying to access an element of an array using a multi-level directive.
