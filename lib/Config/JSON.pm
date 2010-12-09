@@ -1,7 +1,9 @@
 package Config::JSON;
-our $VERSION = '1.5000';
+BEGIN {
+  $Config::JSON::VERSION = '1.5100';
+}
 
-use Moose;
+use Any::Moose;
 use File::Spec;
 use JSON 2.0;
 use List::Util;
@@ -329,7 +331,7 @@ Config::JSON - A JSON based config file system.
 
 =head1 VERSION
 
-version 1.5000
+version 1.5100
 
 =head1 SYNOPSIS
 
@@ -662,5 +664,5 @@ Config::JSON is Copyright 2009 Plain Black Corporation (L<http://www.plainblack.
 
 =cut
 
-no Moose;
+no Any::Moose;
 __PACKAGE__->meta->make_immutable;

@@ -4,24 +4,53 @@ use warnings;
 
 
 
-use ExtUtils::MakeMaker;
+use ExtUtils::MakeMaker 6.31;
 
-WriteMakefile(
-  DISTNAME  => 'Config-JSON',
-  NAME      => 'Config::JSON',
-  AUTHOR    => "JT\ Smith\ \<RIZEN\@cpan\.org\>",
-  ABSTRACT  => "A\ JSON\ based\ config\ file\ system\.",
-  VERSION   => '1.5000',
-  EXE_FILES => [ qw() ],
-  (eval { ExtUtils::MakeMaker->VERSION(6.31) } ? (LICENSE => 'perl') : ()),
-  PREREQ_PM    => {
-    "Test::More" => '0.7',
-    "List::Util" => '1.19',
-    "File::Temp" => '0.18',
-    "JSON" => '2.16',
-    "Test::Deep" => '0.095',
-    "Moose" => '0.93',
+
+
+my %WriteMakefileArgs = (
+  'ABSTRACT' => 'A JSON based config file system.',
+  'AUTHOR' => 'JT Smith <RIZEN@cpan.org>',
+  'BUILD_REQUIRES' => {},
+  'CONFIGURE_REQUIRES' => {
+    'ExtUtils::MakeMaker' => '6.31'
   },
-  test => {TESTS => 't/*.t'}
+  'DISTNAME' => 'Config-JSON',
+  'EXE_FILES' => [],
+  'LICENSE' => 'perl',
+  'NAME' => 'Config::JSON',
+  'PREREQ_PM' => {
+    'Any::Moose' => '0.13',
+    'File::Temp' => '0.18',
+    'JSON' => '2.16',
+    'List::Util' => '1.19',
+    'Test::Deep' => '0.095',
+    'Test::More' => '0.7'
+  },
+  'VERSION' => '1.5100',
+  'test' => {
+    'TESTS' => 't/*.t'
+  }
 );
+
+
+unless ( eval { ExtUtils::MakeMaker->VERSION(6.56) } ) {
+  my $br = delete $WriteMakefileArgs{BUILD_REQUIRES};
+  my $pp = $WriteMakefileArgs{PREREQ_PM};
+  for my $mod ( keys %$br ) {
+    if ( exists $pp->{$mod} ) {
+      $pp->{$mod} = $br->{$mod} if $br->{$mod} > $pp->{$mod};
+    }
+    else {
+      $pp->{$mod} = $br->{$mod};
+    }
+  }
+}
+
+delete $WriteMakefileArgs{CONFIGURE_REQUIRES}
+  unless eval { ExtUtils::MakeMaker->VERSION(6.52) };
+
+WriteMakefile(%WriteMakefileArgs);
+
+
 
