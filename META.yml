@@ -13,10 +13,10 @@ meta-spec:
   version: '1.4'
 name: Config-JSON
 requires:
-  Any::Moose: '0.13'
   File::Temp: '0.18'
   JSON: '2.16'
   List::Util: '1.19'
+  Moo: '0'
   Test::Deep: '0.095'
   Test::More: '0.7'
-version: '1.5200'
+version: '1.5201'

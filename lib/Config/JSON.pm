@@ -1,5 +1,5 @@
 package Config::JSON;
-$Config::JSON::VERSION = '1.5200';
+$Config::JSON::VERSION = '1.5201';
 use strict;
 use Moo;
 use File::Spec;
@@ -329,7 +329,7 @@ Config::JSON - A JSON based config file system.
 
 =head1 VERSION
 
-version 1.5200
+version 1.5201
 
 =head1 SYNOPSIS
 

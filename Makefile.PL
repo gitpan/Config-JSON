@@ -20,14 +20,14 @@ my %WriteMakefileArgs = (
   "LICENSE" => "perl",
   "NAME" => "Config::JSON",
   "PREREQ_PM" => {
-    "Any::Moose" => "0.13",
     "File::Temp" => "0.18",
     "JSON" => "2.16",
     "List::Util" => "1.19",
+    "Moo" => 0,
     "Test::Deep" => "0.095",
     "Test::More" => "0.7"
   },
-  "VERSION" => "1.5200",
+  "VERSION" => "1.5201",
   "test" => {
     "TESTS" => "t/*.t"
   }
@@ -35,10 +35,10 @@ my %WriteMakefileArgs = (
 
 
 my %FallbackPrereqs = (
-  "Any::Moose" => "0.13",
   "File::Temp" => "0.18",
   "JSON" => "2.16",
   "List::Util" => "1.19",
+  "Moo" => 0,
   "Test::Deep" => "0.095",
   "Test::More" => "0.7"
 );
