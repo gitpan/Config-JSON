@@ -1,9 +1,7 @@
 package Config::JSON;
-BEGIN {
-  $Config::JSON::VERSION = '1.5100';
-}
-
-use Any::Moose;
+$Config::JSON::VERSION = '1.5200';
+use strict;
+use Moo;
 use File::Spec;
 use JSON 2.0;
 use List::Util;
@@ -54,7 +52,7 @@ has pathToFile => (
 #-------------------------------------------------------------------
 has isInclude => (
     is      => 'ro',
-    default => 0,
+    default => sub {0},
 );
 
 #-------------------------------------------------------------------
@@ -331,7 +329,7 @@ Config::JSON - A JSON based config file system.
 
 =head1 VERSION
 
-version 1.5100
+version 1.5200
 
 =head1 SYNOPSIS
 
@@ -638,7 +636,7 @@ We couldn't write to the config file. This usually means that the file system is
 
 =head1 PREREQS
 
-L<JSON> L<Moose> L<List::Util> L<Test::More> L<Test::Deep>
+L<JSON> L<Moo> L<List::Util> L<Test::More> L<Test::Deep>
 
 =head1 SUPPORT
 
@@ -664,5 +662,4 @@ Config::JSON is Copyright 2009 Plain Black Corporation (L<http://www.plainblack.
 
 =cut
 
-no Any::Moose;
-__PACKAGE__->meta->make_immutable;
+1;
